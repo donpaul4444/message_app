@@ -10,11 +10,23 @@ function FullScreenLoader() {
   )
 }
 
-// Only signed-in users; everyone else goes to /login.
+// Only signed-in AND admin-approved users. Pending users go to /pending.
 export function ProtectedRoute() {
   const status = useAuthStore((s) => s.status)
+  const userStatus = useAuthStore((s) => s.user?.status)
   if (status === 'loading') return <FullScreenLoader />
   if (status === 'unauthenticated') return <Navigate to="/login" replace />
+  if (userStatus !== 'approved') return <Navigate to="/pending" replace />
+  return <Outlet />
+}
+
+// The "waiting for approval" screen: only signed-in users who aren't approved yet.
+export function PendingRoute() {
+  const status = useAuthStore((s) => s.status)
+  const userStatus = useAuthStore((s) => s.user?.status)
+  if (status === 'loading') return <FullScreenLoader />
+  if (status === 'unauthenticated') return <Navigate to="/login" replace />
+  if (userStatus === 'approved') return <Navigate to="/" replace />
   return <Outlet />
 }
 

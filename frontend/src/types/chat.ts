@@ -1,5 +1,5 @@
-// Chat types. These mirror the backend data model (see CLAUDE.md → Data Model),
-// with populated users and a client-side unreadCount. One-to-one chats only for now.
+// Chat types. These match the backend responses (see CLAUDE.md → API / Socket Events).
+// One-to-one chats only for now.
 
 export interface ChatUser {
   id: string
@@ -21,6 +21,7 @@ export interface LastMessage {
 
 export interface Conversation {
   id: string
+  type: 'direct'
   members: ConversationMember[]
   lastMessage: LastMessage | null
   unreadCount: number
@@ -29,9 +30,10 @@ export interface Conversation {
 }
 
 export interface Message {
-  id: string
+  id: string // a temp id ("temp-…") until the server confirms it
   conversationId: string
   senderId: string
   text: string
   createdAt: string
+  status?: 'sending' | 'failed' // client-only, for my optimistic messages
 }

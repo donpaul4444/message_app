@@ -7,6 +7,8 @@ const userSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true },
     avatar: { type: String, default: '' },
     role: { type: String, enum: ['user', 'admin'], default: 'user' },
+    // New sign-ups wait for an admin. Only "approved" users can use the app; "blocked" can't sign in.
+    status: { type: String, enum: ['pending', 'approved', 'blocked'], default: 'pending' },
     lastSeen: { type: Date, default: Date.now },
   },
   {

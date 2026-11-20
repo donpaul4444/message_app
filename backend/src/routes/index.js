@@ -1,6 +1,9 @@
 import { Router } from 'express'
 import mongoose from 'mongoose'
+import adminRoutes from './admin.routes.js'
 import authRoutes from './auth.routes.js'
+import conversationsRoutes from './conversations.routes.js'
+import usersRoutes from './users.routes.js'
 
 const router = Router()
 
@@ -13,5 +16,8 @@ router.get('/health', (req, res) => {
 })
 
 router.use('/auth', authRoutes)
+router.use('/admin', adminRoutes)
+router.use('/users', usersRoutes)
+router.use('/conversations', conversationsRoutes)
 
 export default router

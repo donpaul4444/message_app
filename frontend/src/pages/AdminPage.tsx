@@ -1,53 +1,143 @@
-import { formatDistanceToNowStrict, format } from 'date-fns'
-import { ArrowLeft, MessageSquare, MessagesSquare, Search, UserX, Users } from 'lucide-react'
-import { useMemo, useState, type ReactNode } from 'react'
+import { format, formatDistanceToNowStrict } from 'date-fns'
+import { ArrowLeft, Check, Clock, Loader2, RefreshCw, Search, UserX, Users, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
+import * as adminApi from '@/api/admin.api'
+import { getErrorMessage } from '@/api/axios'
 import ConversationAvatar from '@/components/chat-list/ConversationAvatar'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import { mockAdminStats, mockAdminUsers, type AdminUserRow } from '@/utils/mockAdminData'
+import { useAuthStore } from '@/store/authStore'
+import type { User } from '@/types/user'
 
-// Admin panel (UI only, sample data). Later: guard with an admin role and load from the API.
+type NewStatus = 'approved' | 'blocked'
+
 export default function AdminPage() {
-  const [users, setUsers] = useState<AdminUserRow[]>(mockAdminUsers)
+  const me = useAuthStore((s) => s.user)
+  const [users, setUsers] = useState<User[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [pendingId, setPendingId] = useState<string | null>(null)
 
-  const visible = useMemo(() => {
+  const load = useCallback(async () => {
+    try {
+      setUsers(await adminApi.listUsers())
+      setError(null)
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not load users'))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void Promise.resolve().then(load)
+  }, [load])
+
+  const requests = users.filter((u) => u.status === 'pending')
+  const members = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return users.filter((u) => !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q))
+    return users
+      .filter((u) => u.status !== 'pending')
+      .filter((u) => !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q))
   }, [users, query])
-
-  const toggleBlocked = (id: string) =>
-    setUsers((prev) =>
-      prev.map((u) => (u.id === id ? { ...u, status: u.status === 'blocked' ? 'active' : 'blocked' } : u)),
-    )
-
   const blockedCount = users.filter((u) => u.status === 'blocked').length
+
+  async function changeStatus(user: User, status: NewStatus) {
+    setPendingId(user.id)
+    setError(null)
+    try {
+      const updated = await adminApi.setUserStatus(user.id, status)
+      setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)))
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not update user'))
+    } finally {
+      setPendingId(null)
+    }
+  }
 
   return (
     <div className="min-h-dvh bg-muted/40">
       <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b bg-background px-4 py-3 md:px-8">
         <div>
           <h1 className="text-lg font-semibold">Admin panel</h1>
-          <p className="text-xs text-muted-foreground">Manage users and see app activity</p>
+          <p className="text-xs text-muted-foreground">Approve sign-ups and manage users</p>
         </div>
-        <Link to="/" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
-          <ArrowLeft />
-          Back to chats
-        </Link>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={loading}
+            onClick={() => {
+              setLoading(true)
+              load()
+            }}
+          >
+            <RefreshCw className={cn(loading && 'animate-spin')} />
+            Refresh
+          </Button>
+          <Link to="/" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+            <ArrowLeft />
+            Back to chats
+          </Link>
+        </div>
       </header>
 
       <main className="mx-auto max-w-6xl space-y-6 px-4 py-6 md:px-8">
-        {/* Stats */}
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <StatCard icon={<Users />} label="Total users" value={users.length} />
-          <StatCard icon={<MessagesSquare />} label="Conversations" value={mockAdminStats.conversations} />
-          <StatCard icon={<MessageSquare />} label="Messages today" value={mockAdminStats.messagesToday} />
-          <StatCard icon={<UserX />} label="Blocked users" value={blockedCount} />
+          <StatCard icon={<Users />} label="Total users" value={loading ? '–' : users.length} />
+          <StatCard icon={<Clock />} label="Pending requests" value={loading ? '–' : requests.length} />
+          <StatCard icon={<UserX />} label="Blocked users" value={loading ? '–' : blockedCount} />
         </section>
 
-        {/* Users */}
+        {error ? (
+          <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2.5 text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
+
+        {/* Pending sign-up requests */}
+        <section className="rounded-xl border bg-background">
+          <div className="border-b px-4 py-3">
+            <h2 className="font-medium">Pending requests</h2>
+            <p className="text-xs text-muted-foreground">People who signed in and are waiting for access</p>
+          </div>
+          {loading ? (
+            <Loader2 className="mx-auto my-8 size-5 animate-spin text-muted-foreground" />
+          ) : requests.length === 0 ? (
+            <p className="px-4 py-8 text-center text-sm text-muted-foreground">No pending requests.</p>
+          ) : (
+            <ul>
+              {requests.map((u) => (
+                <li key={u.id} className="flex flex-wrap items-center gap-3 border-b px-4 py-3 last:border-0">
+                  <UserCell user={u} />
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    requested {formatDistanceToNowStrict(new Date(u.createdAt), { addSuffix: true })}
+                  </span>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      disabled={pendingId === u.id}
+                      onClick={() => changeStatus(u, 'blocked')}
+                    >
+                      <X />
+                      Reject
+                    </Button>
+                    <Button size="sm" disabled={pendingId === u.id} onClick={() => changeStatus(u, 'approved')}>
+                      {pendingId === u.id ? <Loader2 className="animate-spin" /> : <Check />}
+                      Approve
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        {/* Approved + blocked users */}
         <section className="rounded-xl border bg-background">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
             <h2 className="font-medium">Users</h2>
@@ -68,59 +158,57 @@ export default function AdminPage() {
                 <tr className="border-b text-left text-xs text-muted-foreground">
                   <th className="px-4 py-2.5 font-medium">User</th>
                   <th className="px-4 py-2.5 font-medium">Status</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Messages</th>
                   <th className="px-4 py-2.5 font-medium">Joined</th>
-                  <th className="px-4 py-2.5 font-medium">Last active</th>
+                  <th className="px-4 py-2.5 font-medium">Last sign-in</th>
                   <th className="px-4 py-2.5 text-right font-medium">Action</th>
                 </tr>
               </thead>
               <tbody>
-                {visible.map((u) => (
-                  <tr key={u.id} className="border-b last:border-0">
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <ConversationAvatar name={u.name} src={u.avatar} className="size-9" />
-                        <div className="min-w-0 leading-tight">
-                          <p className="truncate font-medium">{u.name}</p>
-                          <p className="truncate text-xs text-muted-foreground">{u.email}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={cn(
-                          'rounded-full px-2 py-0.5 text-xs font-medium',
-                          u.status === 'blocked'
-                            ? 'bg-destructive/10 text-destructive'
-                            : 'bg-secondary text-secondary-foreground',
-                        )}
-                      >
-                        {u.status === 'blocked' ? 'Blocked' : 'Active'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">{u.messageCount}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{format(new Date(u.joinedAt), 'MMM d, yyyy')}</td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {formatDistanceToNowStrict(new Date(u.lastActiveAt), { addSuffix: true })}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <Button
-                        size="sm"
-                        variant={u.status === 'blocked' ? 'outline' : 'destructive'}
-                        onClick={() => toggleBlocked(u.id)}
-                      >
-                        {u.status === 'blocked' ? 'Unblock' : 'Block'}
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-                {visible.length === 0 ? (
+                {loading ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">
-                      No users match your search.
+                    <td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">
+                      <Loader2 className="mx-auto size-5 animate-spin" />
                     </td>
                   </tr>
-                ) : null}
+                ) : members.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">
+                      {query ? 'No users match your search.' : 'No users yet.'}
+                    </td>
+                  </tr>
+                ) : (
+                  members.map((u) => (
+                    <tr key={u.id} className="border-b last:border-0">
+                      <td className="px-4 py-3">
+                        <UserCell user={u} isMe={u.id === me?.id} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusPill user={u} />
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {format(new Date(u.createdAt), 'MMM d, yyyy')}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {formatDistanceToNowStrict(new Date(u.lastSeen), { addSuffix: true })}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {u.role === 'admin' ? (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant={u.status === 'blocked' ? 'outline' : 'destructive'}
+                            disabled={pendingId === u.id}
+                            onClick={() => changeStatus(u, u.status === 'blocked' ? 'approved' : 'blocked')}
+                          >
+                            {pendingId === u.id ? <Loader2 className="animate-spin" /> : null}
+                            {u.status === 'blocked' ? 'Unblock' : 'Block'}
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -130,7 +218,39 @@ export default function AdminPage() {
   )
 }
 
-function StatCard({ icon, label, value }: { icon: ReactNode; label: string; value: number }) {
+function UserCell({ user, isMe }: { user: User; isMe?: boolean }) {
+  return (
+    <div className="flex min-w-0 items-center gap-3">
+      <ConversationAvatar name={user.name} src={user.avatar} className="size-9" />
+      <div className="min-w-0 leading-tight">
+        <p className="flex items-center gap-1.5 truncate font-medium">
+          {user.name}
+          {isMe ? <span className="text-xs font-normal text-muted-foreground">(you)</span> : null}
+        </p>
+        <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+      </div>
+    </div>
+  )
+}
+
+function StatusPill({ user }: { user: User }) {
+  const isAdmin = user.role === 'admin'
+  const label = isAdmin ? 'Admin' : user.status === 'blocked' ? 'Blocked' : 'Active'
+  return (
+    <span
+      className={cn(
+        'rounded-full px-2 py-0.5 text-xs font-medium',
+        isAdmin && 'bg-primary text-primary-foreground',
+        !isAdmin && user.status === 'blocked' && 'bg-destructive/10 text-destructive',
+        !isAdmin && user.status !== 'blocked' && 'bg-secondary text-secondary-foreground',
+      )}
+    >
+      {label}
+    </span>
+  )
+}
+
+function StatCard({ icon, label, value }: { icon: ReactNode; label: string; value: ReactNode }) {
   return (
     <div className="rounded-xl border bg-background p-4">
       <div className="flex items-center gap-2 text-muted-foreground [&_svg]:size-4">

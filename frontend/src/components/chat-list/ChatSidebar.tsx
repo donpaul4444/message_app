@@ -1,6 +1,7 @@
-import { LogOut, MessageSquarePlus, Search, ShieldUser } from 'lucide-react'
+import { Loader2, LogOut, MessageSquarePlus, Search, ShieldUser, WifiOff } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import NewChatDialog from '@/components/modals/NewChatDialog'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -13,12 +14,16 @@ import ConversationAvatar from './ConversationAvatar'
 export default function ChatSidebar({ className }: { className?: string }) {
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
-  const meId = useChatStore((s) => s.meId)
+  const meId = user?.id ?? ''
   const conversations = useChatStore((s) => s.conversations)
+  const loaded = useChatStore((s) => s.conversationsLoaded)
+  const error = useChatStore((s) => s.error)
+  const connectionLost = useChatStore((s) => s.connectionLost)
   const activeConversationId = useChatStore((s) => s.activeConversationId)
-  const selectConversation = useChatStore((s) => s.selectConversation)
+  const openConversation = useChatStore((s) => s.openConversation)
 
   const [query, setQuery] = useState('')
+  const [newChatOpen, setNewChatOpen] = useState(false)
 
   // Sorted by latest message, then filtered by search.
   const visible = useMemo(() => {
@@ -40,7 +45,7 @@ export default function ChatSidebar({ className }: { className?: string }) {
           </div>
         </div>
         <div className="flex shrink-0 items-center">
-          <Button variant="ghost" size="icon" title="New chat" aria-label="New chat">
+          <Button variant="ghost" size="icon" title="New chat" aria-label="New chat" onClick={() => setNewChatOpen(true)}>
             <MessageSquarePlus />
           </Button>
           {user?.role === 'admin' ? (
@@ -59,6 +64,13 @@ export default function ChatSidebar({ className }: { className?: string }) {
         </div>
       </header>
 
+      {connectionLost ? (
+        <p className="flex items-center gap-2 border-b bg-muted px-3 py-1.5 text-xs text-muted-foreground">
+          <WifiOff className="size-3.5" />
+          Connection lost. Reconnecting…
+        </p>
+      ) : null}
+
       {/* Search */}
       <div className="px-3 pt-3 pb-2">
         <div className="relative">
@@ -72,12 +84,24 @@ export default function ChatSidebar({ className }: { className?: string }) {
         </div>
       </div>
 
+      {error ? <p className="mx-3 mb-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p> : null}
+
       {/* Conversation list */}
       <nav className="flex-1 overflow-y-auto pb-2" aria-label="Chats">
-        {visible.length === 0 ? (
-          <p className="px-4 py-10 text-center text-sm text-muted-foreground">
-            {query ? 'No chats match your search.' : 'No chats yet.'}
-          </p>
+        {!loaded ? (
+          <Loader2 className="mx-auto mt-10 size-5 animate-spin text-muted-foreground" />
+        ) : visible.length === 0 ? (
+          query ? (
+            <p className="px-4 py-10 text-center text-sm text-muted-foreground">No chats match your search.</p>
+          ) : (
+            <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
+              <p className="text-sm text-muted-foreground">No chats yet.</p>
+              <Button size="sm" onClick={() => setNewChatOpen(true)}>
+                <MessageSquarePlus />
+                Start a new chat
+              </Button>
+            </div>
+          )
         ) : (
           visible.map((c) => (
             <ChatListItem
@@ -85,11 +109,13 @@ export default function ChatSidebar({ className }: { className?: string }) {
               conversation={c}
               meId={meId}
               active={c.id === activeConversationId}
-              onSelect={selectConversation}
+              onSelect={openConversation}
             />
           ))
         )}
       </nav>
+
+      <NewChatDialog open={newChatOpen} onOpenChange={setNewChatOpen} />
     </aside>
   )
 }

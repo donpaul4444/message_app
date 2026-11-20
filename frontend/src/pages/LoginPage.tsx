@@ -9,6 +9,7 @@ const hasGoogleClientId = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID)
 
 export default function LoginPage() {
   const loginWithGoogle = useAuthStore((s) => s.loginWithGoogle)
+  const sessionError = useAuthStore((s) => s.sessionError)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -62,9 +63,11 @@ export default function LoginPage() {
             />
           )}
 
-          {error && <p className="text-center text-sm text-destructive">{error}</p>}
+          {(error ?? sessionError) && <p className="text-center text-sm text-destructive">{error ?? sessionError}</p>}
 
           <p className="text-center text-xs text-muted-foreground">
+            New accounts need admin approval before they can start chatting.
+            <br />
             We only use your Google name, email and profile picture.
           </p>
         </CardContent>

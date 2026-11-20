@@ -2,9 +2,10 @@ import http from 'node:http'
 import app from './app.js'
 import { connectDB, disconnectDB } from './config/db.js'
 import { env } from './config/env.js'
+import { initSocket } from './socket/index.js'
 
 const server = http.createServer(app)
-// Socket.IO will be attached to `server` here (see src/socket/).
+initSocket(server)
 
 async function start() {
   try {

@@ -9,25 +9,21 @@ Scope: **web app only** for now. The backend is still a standalone REST + WebSoc
 **Auth**
 - Sign in with Google only (no passwords, no phone/OTP)
 - Persistent login via JWT in an httpOnly cookie; logout
+- Admin approval: new users are `pending` after Google sign-in and see a "waiting for approval" page until an admin approves them. Admins (emails in `ADMIN_EMAILS`) are approved automatically.
 
-**One-to-one chat**
-- Search users by name/email and start a chat
+**One-to-one chat** (any approved user can chat with any other approved user)
+- Search approved users by name/email and start a chat
 - Starting a chat with the same person reuses the existing conversation (no duplicates)
-
-**Group chat**
-- Create a group (name + members)
-- Admins can add/remove members and rename the group
-- Members can leave a group
-- System messages for group events (e.g. "Paul added Ravi")
-
-**Messaging (both types)**
 - Real-time send/receive
 - Message history with cursor pagination ("load older")
-- Typing indicator, online / last-seen status
 - Unread count per conversation
 - Chat list sorted by latest message
 
-Out of scope for MVP (planned later): images/files, message edit/delete, replies, reactions, push notifications, workspaces/organizations, billing, mobile app.
+**Admin**
+- Approve / reject sign-up requests, block / unblock users. Admins cannot read other users' chats.
+
+Deliberately left out of the current UI (planned later): group chats, typing indicator, online / last-seen status, read receipts (ticks).
+Also out of scope: images/files, message edit/delete, replies, reactions, push notifications, workspaces/organizations, billing, mobile app.
 
 ## Tech Stack
 
@@ -85,13 +81,14 @@ MongoDB (local or MongoDB Atlas).
 1. Client emits `message:send` with `{ conversationId, text, tempId }` and shows the message optimistically as "sending".
 2. Server checks membership, saves the message, updates `conversation.lastMessage`.
 3. Server responds via **ack callback** with the saved message; client replaces the temp message (matched by `tempId`).
-4. Server emits `message:new` to the conversation room.
+4. Server emits `message:new` to the other members' `user:<id>` rooms, and to the sender's other tabs (with `tempId` so they can dedupe).
 
-On socket reconnect, the client fetches missed messages via REST, so nothing is lost.
+On socket reconnect, the client refetches the chat list and the open chat via REST, so nothing is lost.
+A chat someone else started only appears in my list once it has a message; the client fetches it (`GET /conversations/:id`) when its first `message:new` arrives.
 
 ### Socket rooms
-- On connect, each user joins `user:<userId>` and `conv:<conversationId>` for every conversation they belong to.
-- When a user is added to a group or a new chat is created, the server notifies their `user:<id>` room and joins their sockets to the new conversation room.
+- On connect, each socket joins `user:<userId>`. 1:1 messages are delivered to members' user rooms, so there are no per-conversation rooms to maintain.
+- Blocking a user (admin) disconnects their sockets immediately (`disconnectUser`).
 
 ## Data Model
 
@@ -99,27 +96,28 @@ On socket reconnect, the client fetches missed messages via REST, so nothing is 
 User
   googleId (unique), email (unique), name, avatar, lastSeen, timestamps
   role: "user" | "admin"  // emails in ADMIN_EMAILS are promoted to admin on Google sign-in
+  status: "pending" | "approved" | "blocked"   // new sign-ups are pending until an admin approves
 
 Conversation
-  type: "direct" | "group"
-  members: [{ user: ObjectId<User>, role: "admin" | "member", lastReadAt: Date }]
-  name, avatar            // group only
+  type: "direct"          // "group" planned later
+  members: [{ user: ObjectId<User>, lastReadAt: Date }]
+  directKey: "idA:idB"    // sorted member ids, unique → one conversation per pair, even under races
   createdBy: ObjectId<User>
-  lastMessage: { text, sender, type, createdAt }   // denormalized for fast chat list
+  lastMessage: { text, sender, createdAt }   // denormalized for fast chat list
   timestamps
-  indexes: { "members.user": 1, updatedAt: -1 }
+  indexes: { "members.user": 1, updatedAt: -1 }, { directKey: 1 } unique sparse
 
 Message
   conversation: ObjectId<Conversation>
-  sender: ObjectId<User>  // null for system messages
-  type: "text" | "system" // extend later: "image" | "file" | ...
-  text
+  sender: ObjectId<User>
+  type: "text"            // extend later: "image" | "file" | ...
+  text (max 4000)
   timestamps
-  indexes: { conversation: 1, createdAt: -1 }
+  indexes: { conversation: 1, _id: -1 }   // history paginates by _id ("before" cursor)
 ```
 
 Notes:
-- One `Conversation` model handles both direct and group chats, so messaging features work for both.
+- One `Conversation` model is meant to handle direct and (later) group chats, so messaging features work for both.
 - Unread count = messages in the conversation with `createdAt > members[me].lastReadAt`.
 - Messages live in their own collection (never embedded) to avoid the 16MB document limit.
 
@@ -132,18 +130,18 @@ POST   /auth/google                       sign in with Google ID token
 GET    /auth/me                           current user
 POST   /auth/logout                       clear cookie
 
-GET    /users/search?q=                   search users by name/email
+GET    /users/search?q=                   search approved users by name/email (excludes me)
 
 GET    /conversations                     list my conversations (+ unread counts)
-POST   /conversations/direct              { userId } → get or create 1:1 chat
-POST   /conversations/group               { name, memberIds } → create group
-GET    /conversations/:id                 conversation details
-PATCH  /conversations/:id                 rename group (admin)
-POST   /conversations/:id/members         add members (admin)
-DELETE /conversations/:id/members/:userId remove member (admin) / leave (self)
+POST   /conversations/direct              { userId } → get or create 1:1 chat (other user must be approved)
+GET    /conversations/:id                 conversation details (404 if not a member)
 
 GET    /conversations/:id/messages?before=<messageId>&limit=30   paginated history
 POST   /conversations/:id/read            mark as read (updates lastReadAt)
+
+# admin only (requireAuth + requireAdmin)
+GET    /admin/users?q=                    list all users
+PATCH  /admin/users/:userId/status        { status: "approved" | "blocked" } → approve/unblock or reject/block (not self, not admins)
 ```
 
 Error response format: `{ "error": { "code": "STRING_CODE", "message": "Human readable" } }`
@@ -152,14 +150,11 @@ Error response format: `{ "error": { "code": "STRING_CODE", "message": "Human re
 
 | Event | Direction | Payload |
 |---|---|---|
-| `message:send` | client → server (with ack) | `{ conversationId, text, tempId }` |
-| `message:new` | server → client | `{ message }` |
-| `typing:start` / `typing:stop` | client → server | `{ conversationId }` |
-| `typing` | server → client | `{ conversationId, userId, isTyping }` |
-| `conversation:read` | client → server | `{ conversationId }` |
-| `conversation:read` | server → client | `{ conversationId, userId, lastReadAt }` |
-| `conversation:new` / `conversation:updated` | server → client | `{ conversation }` |
-| `presence` | server → client | `{ userId, online, lastSeen }` |
+| `message:send` | client → server (with ack) | `{ conversationId, text, tempId }` → ack `{ ok: true, message }` or `{ ok: false, error: { code, message } }` |
+| `message:new` | server → client | `{ message, tempId? }` (`tempId` only to the sender's other tabs) |
+
+Socket handshake errors: `UNAUTHORIZED`, `NOT_APPROVED`. Mark-as-read uses REST (`POST /conversations/:id/read`).
+Planned later: `typing`, `presence`, `conversation:read` broadcasts (for ticks).
 
 ## Project Structure
 
@@ -227,4 +222,5 @@ VITE_GOOGLE_CLIENT_ID=
 - Validate every REST body and socket payload with zod.
 - Always check conversation membership on the server before reading or sending messages.
 - Never trust client-sent `sender` IDs; take the user from the authenticated token/socket.
+- Protect app routes with `requireAuth` (signed in **and** approved). `requireSession` also lets pending users through, and is only for `GET /auth/me`. The Socket.IO auth middleware must reject non-approved users too.
 - Paginate messages by cursor (`before` messageId), never by page number.
